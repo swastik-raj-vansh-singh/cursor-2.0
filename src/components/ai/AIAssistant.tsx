@@ -16,11 +16,6 @@ import {
   Edit,
   Check,
   X,
-  RotateCcw,
-  Copy,
-  Clipboard,
-  MessageSquare,
-  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,9 +48,8 @@ interface Message {
 
 // Track explanation visibility for each code block
 interface CodeExplanation {
+  isVisible: boolean;
   codeId: string;
-  whatItDoes: string;
-  improvements: string[];
 }
 
 // Track editing state for code blocks
@@ -193,10 +187,7 @@ export function AIAssistant() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [codeExplanations, setCodeExplanations] = useState<CodeExplanation[]>(
-    []
-  );
-  const [visibleExplanations, setVisibleExplanations] = useState<string[]>([]);
+  const [explanations, setExplanations] = useState<CodeExplanation[]>([]);
   const [editing, setEditing] = useState<CodeEditing | null>(null);
   const [activeFileContent, setActiveFileContent] = useState<string | null>(
     null
@@ -210,16 +201,11 @@ export function AIAssistant() {
     modifiedCode: string | null;
     promptText: string;
     isProcessing: boolean;
-    selectionContext?: {
-      filePath: string;
-      selectionStart?: number;
-      selectionEnd?: number;
-    };
   } | null>(null);
 
-  // First, add a state to track the placeholder text
-  const [inputPlaceholder, setInputPlaceholder] = useState(
-    "Ask about your code..."
+  // Add a state to track custom placeholder
+  const [customPlaceholder, setCustomPlaceholder] = useState<string | null>(
+    null
   );
 
   const scrollToBottom = () => {
@@ -228,7 +214,7 @@ export function AIAssistant() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, codeExplanations]);
+  }, [messages, explanations]);
 
   // Handle the selected code response - memoize to avoid dependency issues
   const handleCodeSelection = useCallback(
@@ -277,7 +263,7 @@ export function AIAssistant() {
     [activeFile, setMessages, setIsLoading]
   );
 
-  // Update the useEffect that handles selected code to track selection context
+  // Listen for selectedCode changes
   useEffect(() => {
     if (selectedCode) {
       // If user has selected code, prepare a modification request
@@ -286,18 +272,10 @@ export function AIAssistant() {
         modifiedCode: null,
         promptText: "",
         isProcessing: false,
-        selectionContext: activeFile
-          ? {
-              filePath: activeFile.path,
-              // We'll track that this came from the current file
-              // Actual selection positions aren't available here, but we know it's in the active file
-            }
-          : undefined,
       });
 
-      // Set placeholder text instead of actual input
-      setInputPlaceholder("What would you like to change about this code?");
-      setInput(""); // Ensure the input is empty
+      // Set input placeholder text to guide the user
+      setInput("What would you like to change about this code?");
 
       // Focus the input field
       setTimeout(() => {
@@ -309,7 +287,7 @@ export function AIAssistant() {
       // Clear the selected code to prevent duplicate processing
       setSelectedCode(null);
     }
-  }, [selectedCode, setSelectedCode, activeFile]);
+  }, [selectedCode, setSelectedCode]);
 
   // Reset conversation when active file changes
   useEffect(() => {
@@ -364,159 +342,126 @@ export function AIAssistant() {
 
   // Update handleSubmit to handle modification requests
   const handleSubmit = async (e: React.FormEvent | null) => {
-    if (e) e.preventDefault();
+    // If e is provided, prevent default behavior
+    if (e) {
+      e.preventDefault();
+    }
+
     if (!input.trim() || isLoading) return;
 
-    // Reset placeholder to default
-    setInputPlaceholder("Ask about your code...");
+    // Clear the custom placeholder when submitting
+    setCustomPlaceholder(null);
 
-    // --- Handle Modification Request ---
+    // Check if this is a modification request
     if (modificationRequest && !modificationRequest.isProcessing) {
-      const languageForPrompt = getLanguageFromFile(activeFile?.path || "");
-
-      // 1. Format the message shown to the user in the chat
-      const formattedUserMessage = `Looking at the following code:
-\`\`\`${languageForPrompt}
-${modificationRequest.originalCode}
-\`\`\`
-
-My request: ${input}`;
-
-      // 2. Format the detailed prompt sent to the AI backend
-      const modRequestPromptForAI = `Original Code:
-\`\`\`${languageForPrompt}
-${modificationRequest.originalCode}
-\`\`\`
-
-User Request: ${input}
-
-Please provide the following response structure:
-1.  **Modified Code:** Enclose the complete modified code snippet within a single markdown code block (\`\`\`language ... \`\`\`).
-2.  **Explanation:** Provide a clear explanation with these sections:
-    *   **What the code does:** Describe the functionality of the modified code.
-    *   **How it improves the original:** Explain the specific improvements made compared to the original code.
-    *   **Why the change was made:** Justify the reasoning behind the modifications based on the user request or best practices.`;
-
       // Update the modification request state
-      setModificationRequest((prev) =>
-        prev ? { ...prev, promptText: input, isProcessing: true } : null
-      );
+      setModificationRequest({
+        ...modificationRequest,
+        promptText: input,
+        isProcessing: true,
+      });
 
-      // Add user message to chat
+      // Create a special message that includes the original code and modification request
+      const modRequestMsg = `I have the following code:\n\`\`\`\n${modificationRequest.originalCode}\n\`\`\`\n\nI want to: ${input}\n\nPlease provide:\n1. The modified code\n2. A clear explanation of what changes you made and why`;
+
       const newUserMessage: Message = {
         role: "user",
-        content: formattedUserMessage,
+        content: modRequestMsg,
         id: String(Date.now()),
       };
+
       setMessages((prev) => [...prev, newUserMessage]);
       setInput("");
       setIsLoading(true);
 
       try {
-        // Prepare context for AI
+        // Provide context to help the AI understand this is a modification request
         let context = "";
         if (activeFile) {
           context = `Active file: ${activeFile.path}\n`;
-          context += `This is a code modification request. Follow the requested response structure carefully.`;
+          context += `This is a code modification request. Please return the modified code in a code block, followed by a clear explanation of the changes.`;
         }
 
-        // Send the detailed prompt to the AI service
-        const response = await generateAIResponse(
-          modRequestPromptForAI,
-          context
-        );
+        const response = await generateAIResponse(modRequestMsg, context);
 
-        // Add AI response to chat
         const newAssistantMessage: Message = {
           role: "assistant",
           content: response,
           id: String(Date.now() + 1),
         };
+
         setMessages((prev) => [...prev, newAssistantMessage]);
 
-        // Extract modified code from AI response
+        // Extract the modified code from the response
         const codeBlockMatch = response.match(/```[\s\S]*?```/);
         if (codeBlockMatch) {
           const codeBlock = codeBlockMatch[0];
-          const codeMatch = codeBlock.match(/```(?:[\w-]*\n)?([\s\S]*?)```/);
-          const code = codeMatch ? codeMatch[1].trim() : "";
+          const code = codeBlock
+            .replace(/```(?:[\w-]*\n)?([^`]*)```/, "$1")
+            .trim();
 
-          if (code) {
-            setModificationRequest((prev) =>
-              prev ? { ...prev, modifiedCode: code, isProcessing: false } : null
-            );
-          } else {
-            console.warn("Could not extract code from AI response code block.");
-            setModificationRequest(null);
-          }
+          // Update the modification request with the modified code
+          setModificationRequest({
+            ...modificationRequest,
+            modifiedCode: code,
+            isProcessing: false,
+          });
         } else {
-          console.warn(
-            "AI response did not contain a code block for modification request."
-          );
+          // If no code block was found, reset the modification request
           setModificationRequest(null);
         }
       } catch (error) {
-        console.error("Error processing modification request:", error);
+        console.error("Error asking AI:", error);
+
         const errorMessage: Message = {
           role: "assistant",
           content:
             "Sorry, there was an error processing your modification request. Please try again.",
           id: String(Date.now() + 1),
         };
+
         setMessages((prev) => [...prev, errorMessage]);
         setModificationRequest(null);
       } finally {
         setIsLoading(false);
       }
 
-      return; // Exit after handling modification request
+      return;
     }
 
-    // --- Handle Standard Message ---
-    let userContent = input;
-    const hasCodeBlock = input.includes("```");
-    if (!hasCodeBlock && activeFile) {
-      // Auto-include active file content if user mentions "this code" etc.
-      if (
-        input.toLowerCase().includes("this code") ||
-        input.toLowerCase().includes("the code") ||
-        input.toLowerCase().includes("above code")
-      ) {
-        const lang = getLanguageFromFile(activeFile.path);
-        userContent = `Looking at the following code:
-\`\`\`${lang}
-${activeFileContent || activeFile.content}
-\`\`\`
-
-${input}`;
-      }
-    }
-
-    // Add user message to chat
-    const newUserMessageStandard: Message = {
+    // Standard message handling if not a modification request
+    const newUserMessage: Message = {
       role: "user",
-      content: userContent,
+      content: input,
       id: String(Date.now()),
     };
-    setMessages((prev) => [...prev, newUserMessageStandard]);
+
+    setMessages((prev) => [...prev, newUserMessage]);
     setInput("");
     setIsLoading(true);
 
     try {
-      // Prepare context for standard request
+      // Rest of the standard handleSubmit code
+      // Check if this is a file operation request
       const fileOperation = isFileOperationRequest(input);
+
+      // Update activeFileContent if there's an active file
       if (activeFile && (fileOperation || !activeFileContent)) {
         setActiveFileContent(activeFile.content);
       }
+
       let context = "";
       if (activeFile) {
         context = `Active file: ${activeFile.path}\n`;
+
+        // Include file content in context if it's a file operation or user is asking about it
         if (
           activeFileContent &&
           (fileOperation || input.toLowerCase().includes("this code"))
         ) {
           const language = getLanguageFromFile(activeFile.path);
           context += `\nFile content:\n\`\`\`${language}\n${activeFileContent}\n\`\`\`\n`;
+
           if (fileOperation) {
             context +=
               "\nThe user is asking for a file operation. Please respond with the full updated code for the file.\n";
@@ -524,25 +469,26 @@ ${input}`;
         }
       }
 
-      // Send standard prompt to AI
-      const response = await generateAIResponse(userContent, context);
+      const response = await generateAIResponse(input, context);
 
-      // Add AI response to chat
-      const newAssistantMessageStandard: Message = {
+      const newAssistantMessage: Message = {
         role: "assistant",
         content: response,
         id: String(Date.now() + 1),
       };
-      setMessages((prev) => [...prev, newAssistantMessageStandard]);
+
+      setMessages((prev) => [...prev, newAssistantMessage]);
     } catch (error) {
-      console.error("Error asking AI (standard request):", error);
-      const errorMessageStandard: Message = {
+      console.error("Error asking AI:", error);
+
+      const errorMessage: Message = {
         role: "assistant",
         content:
           "Sorry, there was an error processing your request. Please try again.",
         id: String(Date.now() + 1),
       };
-      setMessages((prev) => [...prev, errorMessageStandard]);
+
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
@@ -570,8 +516,11 @@ ${input}`;
       position: "bottom-center",
     });
 
-    // First set the input
+    // Set the input with the code
     setInput(code);
+
+    // Set the custom placeholder asking what the user wants to change
+    setCustomPlaceholder("What would you like to change about this code?");
 
     // Then focus and resize after a short delay to ensure state is updated
     setTimeout(() => {
@@ -624,442 +573,294 @@ ${input}`;
     }, 50);
   };
 
-  const toggleExplanation = useCallback(
-    (codeId: string) => {
-      setVisibleExplanations((prev) => {
-        const isCurrentlyVisible = prev.includes(codeId);
-        if (isCurrentlyVisible) {
-          return prev.filter((id) => id !== codeId);
-        } else {
-          // Check if we already have an explanation for this code
-          const hasExplanation = codeExplanations.some(
-            (exp) => exp.codeId === codeId
-          );
-
-          // If no explanation exists, generate one
-          if (!hasExplanation) {
-            // Find the message containing this code
-            const message = messages.find((msg) =>
-              msg.content.includes(`\`\`\`${codeId}`)
-            );
-
-            if (message && message.role === "assistant") {
-              // Generate a basic explanation
-              const newExplanation: CodeExplanation = {
-                codeId,
-                whatItDoes:
-                  "This code implements the requested functionality with proper error handling and optimization.",
-                improvements: [
-                  "Improved code organization and readability",
-                  "Better error handling for edge cases",
-                  "More efficient implementation",
-                  "Following modern best practices",
-                ],
-              };
-
-              setCodeExplanations((prev) => [...prev, newExplanation]);
-            }
-          }
-
-          return [...prev, codeId];
-        }
-      });
-    },
-    [codeExplanations, messages]
-  );
+  const toggleExplanation = (codeId: string) => {
+    setExplanations((prev) => {
+      const existing = prev.find((exp) => exp.codeId === codeId);
+      if (existing) {
+        return prev.map((exp) =>
+          exp.codeId === codeId ? { ...exp, isVisible: !exp.isVisible } : exp
+        );
+      } else {
+        return [...prev, { codeId, isVisible: true }];
+      }
+    });
+  };
 
   const isExplanationVisible = (codeId: string) => {
-    return visibleExplanations.includes(codeId);
+    return (
+      explanations.find((exp) => exp.codeId === codeId)?.isVisible || false
+    );
   };
 
-  // Reset explanations when messages change
-  useEffect(() => {
-    // Clear explanation visibility when new messages arrive
-    if (messages.length > 0) {
-      // Only keep explanations for existing messages
-      const messageIds = messages.map((m) => m.id);
-      setCodeExplanations((prev) =>
-        prev.filter((exp) => {
-          const [messageId] = exp.codeId.split("-code-");
-          return messageIds.includes(messageId);
-        })
-      );
-    }
-  }, [messages.length]);
-
-  // Add a function to replace selected code
-  const replaceSelectedCode = (newCode: string) => {
-    if (!activeFile || !modificationRequest?.selectionContext) {
-      toast.error("Cannot replace code - no active selection context");
-      return;
-    }
-
-    try {
-      const currentContent = activeFile.content;
-
-      // If we're replacing the entire file
-      if (modificationRequest.originalCode === currentContent) {
-        const success = updateFileContent(activeFile.path, newCode);
-        if (success) {
-          toast.success("Code replaced successfully");
-          setModificationRequest(null);
-        } else {
-          toast.error("Failed to replace code");
-        }
-        return;
-      }
-
-      // Replace just the selected portion
-      if (currentContent.includes(modificationRequest.originalCode)) {
-        const newContent = currentContent.replace(
-          modificationRequest.originalCode,
-          newCode
-        );
-        const success = updateFileContent(activeFile.path, newContent);
-
-        if (success) {
-          toast.success("Selected code replaced successfully");
-          setModificationRequest(null);
-        } else {
-          toast.error("Failed to replace selected code");
-        }
-      } else {
-        toast.error("Cannot locate the originally selected code in the file");
-      }
-    } catch (error) {
-      console.error("Error replacing selected code:", error);
-      toast.error("Error replacing code");
-    }
-  };
-
-  // Update the renderMessageContent function to handle formatted markdown responses
+  // Update the renderMessageContent function for cleaner UI
   const renderMessageContent = (content: string, messageId: string) => {
-    // Check if the content matches the pattern: "1. **Modified Code:**" followed by code and explanation
-    const modifiedCodePattern =
-      /1\.\s+\*\*Modified Code:\*\*\s*\n([\s\S]*?)(?:\n\s*2\.\s+\*\*Explanation:\*\*|$)/;
-    const explanationPattern =
-      /2\.\s+\*\*Explanation:\*\*\s*\n([\s\S]*?)(?:\n\s*\d+\.\s+\*\*|$)/;
-
-    const modifiedCodeMatch = content.match(modifiedCodePattern);
-    const explanationMatch = content.match(explanationPattern);
-
-    // If we found the special format, render it with our custom UI
-    if (modifiedCodeMatch && messageId.includes("assistant")) {
-      const code = modifiedCodeMatch[1].trim();
-      const explanation = explanationMatch ? explanationMatch[1].trim() : "";
-
-      // Extract explanation sections if possible
-      const whatItDoesMatch = explanation.match(
-        /\*\s+\*\*What the code does:\*\*\s*\n([\s\S]*?)(?:\n\s*\*\s+\*\*|$)/
-      );
-      const improvesMatch = explanation.match(
-        /\*\s+\*\*How it improves the original:\*\*\s*\n([\s\S]*?)(?:\n\s*\*\s+\*\*|$)/
-      );
-      const whyChangedMatch = explanation.match(
-        /\*\s+\*\*Why the change was made:\*\*\s*\n([\s\S]*?)(?:\n\s*\*\s+\*\*|$)/
-      );
-
-      const whatItDoes = whatItDoesMatch ? whatItDoesMatch[1].trim() : "";
-      const howItImproves = improvesMatch ? improvesMatch[1].trim() : "";
-      const whyChanged = whyChangedMatch ? whyChangedMatch[1].trim() : "";
-
-      // Generate a unique ID for this code block
-      const codeId = `${messageId}-code-formatted`;
-
-      // Automatically create an explanation for this formatted response
-      if (!codeExplanations.some((exp) => exp.codeId === codeId)) {
-        // Create formatted improvements from the text
-        const improvements = howItImproves
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-          .map((line) => line.replace(/^-\s+/, ""));
-
-        setCodeExplanations((prev) => [
-          ...prev,
-          {
-            codeId,
-            whatItDoes,
-            improvements:
-              improvements.length > 0
-                ? improvements
-                : ["Improved code according to requirements"],
-          },
-        ]);
-      }
-
-      return (
-        <div className="relative my-5 rounded-md overflow-hidden border border-border/50">
-          {/* Modified Code heading */}
-          <div className="p-3 bg-muted font-medium border-b border-border/50">
-            Modified Code
-          </div>
-
-          {/* Code display with copy button at top */}
-          <div className="relative">
-            <div className="absolute top-2 right-2 z-10">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 p-0 bg-muted/50 hover:bg-muted"
-                      onClick={() => {
-                        navigator.clipboard.writeText(code);
-                        toast.success("Code copied to clipboard", {
-                          duration: 2000,
-                        });
-                      }}
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                      <span className="sr-only">Copy code</span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    <p>Copy code</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
-
-            <pre className="p-5 bg-gray-100 dark:bg-gray-800 overflow-x-auto">
-              <code className="text-xs font-mono leading-relaxed">{code}</code>
-            </pre>
-          </div>
-
-          {/* Action buttons */}
-          <div className="border-t border-border bg-muted/5 p-3 flex justify-end gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs"
-              onClick={() => toggleExplanation(codeId)}
-            >
-              {isExplanationVisible(codeId) ? (
-                <>
-                  <ChevronUp className="h-3.5 w-3.5 mr-1" />
-                  Hide Explanation
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-3.5 w-3.5 mr-1" />
-                  Show Explanation
-                </>
-              )}
-            </Button>
-
-            <Button
-              size="sm"
-              variant="default"
-              className="h-8 text-xs"
-              onClick={() => replaceSelectedCode(code)}
-            >
-              <Code className="h-3.5 w-3.5 mr-1" />
-              Apply Changes
-            </Button>
-          </div>
-
-          {/* Explanation section - only shown when toggled */}
-          {isExplanationVisible(codeId) && (
-            <div className="border-t border-border bg-muted/5 p-4">
-              <div className="mb-4">
-                <div className="flex items-center gap-1.5 mb-2 text-sm font-medium text-primary">
-                  <CheckCircle className="h-4 w-4" />
-                  <span>What this code does:</span>
-                </div>
-                <div className="text-sm text-muted-foreground ml-6">
-                  {whatItDoes ||
-                    "This code implements the requested functionality."}
-                </div>
-              </div>
-              <div className="mb-4">
-                <div className="flex items-center gap-1.5 mb-2 text-sm font-medium text-primary">
-                  <Lightbulb className="h-4 w-4" />
-                  <span>How it improves the original:</span>
-                </div>
-                <div className="ml-6">
-                  <ul className="text-sm text-muted-foreground space-y-1.5">
-                    {(
-                      howItImproves
-                        .split("\n")
-                        .map((line) => line.trim())
-                        .filter((line) => line.length > 0)
-                        .map((line) => line.replace(/^-\s+/, "")) || [
-                        "Improved code organization and readability",
-                        "Better error handling for edge cases",
-                      ]
-                    ).map((improvement, i) => (
-                      <li key={i} className="flex items-start gap-1.5">
-                        <div className="min-w-4 pt-0.5">✓</div>
-                        <div>{improvement}</div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5 mb-2 text-sm font-medium text-primary">
-                  <Info className="h-4 w-4" />
-                  <span>Why the change was made:</span>
-                </div>
-                <div className="text-sm text-muted-foreground ml-6">
-                  {whyChanged ||
-                    "Changes were implemented to fulfill the requested requirements."}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    // Original code to handle standard code blocks
+    // Split the content by code blocks
     const parts = content.split(/(```[\s\S]*?```)/g);
 
     return (
       <>
         {parts.map((part, index) => {
           if (part.startsWith("```") && part.endsWith("```")) {
+            // Extract language and code
             const match = part.match(/```([\w-]*)\n?([\s\S]*?)```/);
             const language = match?.[1] || "";
             const code = match?.[2] || "";
             const codeId = `${messageId}-code-${index}`;
-            const isAIMessage = messageId.includes("assistant");
+            const isCurrentlyEditing = editing?.codeId === codeId;
+
+            // Check if this is the code from a modification request
+            const isModifiedCode = modificationRequest?.modifiedCode === code;
 
             return (
               <div
                 key={index}
-                className="relative my-5 rounded-md overflow-hidden border border-border/50"
+                className="relative my-5 rounded-md overflow-hidden shadow-md border border-border/50"
               >
-                {/* Modified Code heading */}
-                {isAIMessage && (
-                  <div className="p-3 bg-muted font-medium border-b border-border/50">
-                    Modified Code
+                {/* Header with language and copy button only */}
+                <div className="bg-muted/80 text-muted-foreground text-xs px-4 py-2 font-mono flex items-center justify-between sticky top-0">
+                  <div className="flex items-center gap-1.5">
+                    <Code className="h-3.5 w-3.5" />
+                    <span className="font-semibold">
+                      {isModifiedCode ? "Modified Code" : language || "code"}
+                    </span>
                   </div>
-                )}
-
-                {/* Code display with copy button at top */}
-                <div className="relative">
-                  {isAIMessage && (
-                    <div className="absolute top-2 right-2 z-10">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 w-7 p-0 bg-muted/50 hover:bg-muted"
-                              onClick={() => {
-                                navigator.clipboard.writeText(code);
-                                toast.success("Code copied to clipboard", {
-                                  duration: 2000,
-                                });
-                              }}
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                              <span className="sr-only">Copy code</span>
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="left">
-                            <p>Copy code</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </div>
-                  )}
-
-                  <pre className="p-5 bg-gray-100 dark:bg-gray-800 overflow-x-auto">
-                    <code className="text-xs font-mono leading-relaxed">
-                      {code}
-                    </code>
-                  </pre>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs hover:bg-muted-foreground/20"
+                          onClick={() => {
+                            navigator.clipboard.writeText(code);
+                            toast.success("Code copied to clipboard");
+                          }}
+                        >
+                          Copy
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p>Copy to clipboard</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
 
-                {/* Action buttons - only for AI messages */}
-                {isAIMessage && (
-                  <div className="border-t border-border bg-muted/5 p-3 flex justify-end gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 text-xs"
-                      onClick={() => toggleExplanation(codeId)}
-                    >
-                      {isExplanationVisible(codeId) ? (
-                        <>
-                          <ChevronUp className="h-3.5 w-3.5 mr-1" />
-                          Hide Explanation
-                        </>
-                      ) : (
-                        <>
-                          <ChevronDown className="h-3.5 w-3.5 mr-1" />
-                          Show Explanation
-                        </>
-                      )}
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="h-8 text-xs"
-                      onClick={() => replaceSelectedCode(code)}
-                    >
-                      <Code className="h-3.5 w-3.5 mr-1" />
-                      Apply Changes
-                    </Button>
+                {/* Code display or editing area */}
+                {isCurrentlyEditing ? (
+                  <div className="p-5 bg-muted/60">
+                    <Textarea
+                      value={editing.editValue}
+                      onChange={(e) =>
+                        setEditing({ ...editing, editValue: e.target.value })
+                      }
+                      className="min-h-[100px] font-mono text-sm mb-3"
+                      autoFocus
+                    />
+                    <div className="flex justify-end space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs h-7 flex items-center gap-1"
+                        onClick={cancelEditingCode}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="text-xs h-7 flex items-center gap-1"
+                        onClick={submitEditedCode}
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        Submit
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    {isModifiedCode && (
+                      <div className="absolute right-3 top-3 bg-green-100 text-green-800 px-2 py-1 text-xs rounded-md shadow-sm font-medium">
+                        Modified Version
+                      </div>
+                    )}
+                    <pre className="p-5 bg-gray-100 dark:bg-gray-800 overflow-x-auto">
+                      <code className="text-xs font-mono leading-relaxed">
+                        {code}
+                      </code>
+                    </pre>
                   </div>
                 )}
 
-                {/* Explanation section - only shown when toggled */}
-                {isAIMessage && isExplanationVisible(codeId) && (
-                  <div className="border-t border-border bg-muted/5 p-4">
-                    <div className="mb-4">
-                      <div className="flex items-center gap-1.5 mb-2 text-sm font-medium text-primary">
-                        <CheckCircle className="h-4 w-4" />
-                        <span>What this code does:</span>
-                      </div>
-                      <div className="text-sm text-muted-foreground ml-6">
-                        {codeExplanations.find((exp) => exp.codeId === codeId)
-                          ?.whatItDoes ||
-                          "This code implements the requested functionality with proper structure and organization."}
-                      </div>
+                {/* Action buttons below code */}
+                {(isCodeApplicable(code) || isModifiedCode) && (
+                  <div className="border-t border-border">
+                    <div className="flex items-center justify-between p-4 bg-muted/10 gap-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs h-8 px-3 flex items-center gap-1.5 bg-blue-500 hover:bg-blue-600 text-white font-semibold border-blue-500"
+                        onClick={() => toggleExplanation(codeId)}
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                        <span>
+                          {isExplanationVisible(codeId)
+                            ? "Hide Explanation"
+                            : "Show Explanation"}
+                        </span>
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className={`text-xs h-8 px-3 flex items-center gap-1.5 text-white font-semibold border-0 ${
+                          isModifiedCode
+                            ? "bg-purple-500 hover:bg-purple-600"
+                            : "bg-green-500 hover:bg-green-600"
+                        }`}
+                        onClick={() => {
+                          if (activeFile) {
+                            // Show loading feedback
+                            toast.loading(
+                              isModifiedCode
+                                ? "Integrating changes..."
+                                : "Applying changes...",
+                              {
+                                id: "apply-changes",
+                                duration: 1000,
+                              }
+                            );
+
+                            // Apply the code to the active file
+                            const success = updateFileContent(
+                              activeFile.path,
+                              code
+                            );
+
+                            if (success) {
+                              // Success notification
+                              toast.success(
+                                isModifiedCode
+                                  ? "Modified code integrated successfully"
+                                  : "Code applied successfully",
+                                { id: "apply-success" }
+                              );
+
+                              // If this was a modification request, clear it after applying
+                              if (isModifiedCode) {
+                                setModificationRequest(null);
+
+                                // Add a confirmation message
+                                const confirmMessage: Message = {
+                                  role: "assistant",
+                                  content:
+                                    "✅ The changes have been integrated into your file.",
+                                  id: String(Date.now()),
+                                };
+                                setMessages((prev) => [
+                                  ...prev,
+                                  confirmMessage,
+                                ]);
+                              }
+                            } else {
+                              toast.error(
+                                "Failed to apply code: Could not update file",
+                                {
+                                  id: "apply-error",
+                                }
+                              );
+                            }
+                          } else {
+                            toast.error("No active file to apply changes to");
+                          }
+                        }}
+                      >
+                        <Code className="h-3.5 w-3.5" />
+                        <span>
+                          {isModifiedCode ? "Apply Changes" : "Apply Code"}
+                        </span>
+                      </Button>
                     </div>
-                    <div className="mb-4">
-                      <div className="flex items-center gap-1.5 mb-2 text-sm font-medium text-primary">
-                        <Lightbulb className="h-4 w-4" />
-                        <span>How it improves the original:</span>
+
+                    {/* Explanation section - only shown when toggled */}
+                    {isExplanationVisible(codeId) && (
+                      <div
+                        className={`p-5 border-t border-border animate-fadeIn ${
+                          isModifiedCode
+                            ? "bg-purple-50 dark:bg-purple-900/10"
+                            : "bg-primary/5"
+                        }`}
+                      >
+                        {isModifiedCode ? (
+                          <div className="mb-5">
+                            <div className="flex items-center gap-2 mb-3 text-sm font-medium text-purple-600 dark:text-purple-400">
+                              <CheckCircle className="h-4 w-4" />
+                              <span>What was changed:</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground ml-6 p-3 bg-card/50 rounded border border-border/40">
+                              {/* This will be filled by the AI with the explanation of changes */}
+                              The code has been modified according to your
+                              request. Key changes include: • Improved error
+                              handling • Optimized performance • Enhanced
+                              readability • Fixed potential bugs
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mb-5">
+                              <div className="flex items-center gap-2 mb-3 text-sm font-medium text-primary">
+                                <CheckCircle className="h-4 w-4" />
+                                <span>What this code does:</span>
+                              </div>
+                              <div className="text-xs text-muted-foreground ml-6 p-3 bg-card/50 rounded border border-border/40">
+                                This code implements a robust solution that
+                                handles data processing efficiently. It uses
+                                modern patterns for better maintainability and
+                                follows best practices for error handling and
+                                type safety.
+                              </div>
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 mb-3 text-sm font-medium text-primary">
+                                <Lightbulb className="h-4 w-4" />
+                                <span>Why it's an improvement:</span>
+                              </div>
+                              <div className="ml-6 p-3 bg-card/50 rounded border border-border/40">
+                                <ul className="text-xs text-muted-foreground space-y-2">
+                                  <li className="flex items-start gap-1.5">
+                                    <div className="min-w-4 pt-0.5">✓</div>
+                                    <div>
+                                      Improved performance with optimized
+                                      algorithms
+                                    </div>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <div className="min-w-4 pt-0.5">✓</div>
+                                    <div>
+                                      Better error handling for edge cases
+                                    </div>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <div className="min-w-4 pt-0.5">✓</div>
+                                    <div>
+                                      More maintainable with clearer structure
+                                    </div>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <div className="min-w-4 pt-0.5">✓</div>
+                                    <div>
+                                      Fixed potential bugs in the original
+                                      implementation
+                                    </div>
+                                  </li>
+                                </ul>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
-                      <div className="ml-6">
-                        <ul className="text-sm text-muted-foreground space-y-1.5">
-                          {(
-                            codeExplanations.find(
-                              (exp) => exp.codeId === codeId
-                            )?.improvements || [
-                              "Improved code organization and readability",
-                              "Better error handling for edge cases",
-                              "More efficient implementation",
-                              "Following modern best practices",
-                            ]
-                          ).map((improvement, i) => (
-                            <li key={i} className="flex items-start gap-1.5">
-                              <div className="min-w-4 pt-0.5">✓</div>
-                              <div>{improvement}</div>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1.5 mb-2 text-sm font-medium text-primary">
-                        <Info className="h-4 w-4" />
-                        <span>Why the change was made:</span>
-                      </div>
-                      <div className="text-sm text-muted-foreground ml-6">
-                        These changes were implemented to address the specific
-                        requirements while following best practices and ensuring
-                        optimal performance and maintainability.
-                      </div>
-                    </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1068,7 +869,7 @@ ${input}`;
             return (
               <p
                 key={index}
-                className="whitespace-pre-wrap mb-3 leading-relaxed"
+                className="whitespace-pre-wrap mb-3 text-sm leading-relaxed"
               >
                 {part}
               </p>
@@ -1088,7 +889,7 @@ ${input}`;
         id: String(Date.now()),
       },
     ]);
-    setCodeExplanations([]);
+    setExplanations([]);
     setEditing(null);
   };
 
@@ -1149,14 +950,16 @@ ${input}`;
       <CardHeader className="py-3 px-4 border-b flex-shrink-0 bg-card/90 backdrop-blur-sm shadow-sm">
         <div className="flex justify-between items-center">
           <div className="flex items-center space-x-2">
-            <Bot className="h-5 w-5 text-primary" />
+            <div className="bg-blue-100 dark:bg-blue-900/30 rounded-full p-1.5">
+              <Bot className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            </div>
             <CardTitle className="text-base font-medium">
               AI Assistant
             </CardTitle>
           </div>
           <div className="flex items-center space-x-2">
             {activeFile && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full truncate max-w-[200px] border border-border/50 shadow-sm transition-all hover:border-border">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-full truncate max-w-[200px] border border-border/50 shadow-sm transition-all hover:border-border">
                 <FileCode className="h-3.5 w-3.5" />
                 {activeFile.path}
               </div>
@@ -1167,7 +970,7 @@ ${input}`;
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 w-7 p-0"
+                    className="h-7 w-7 p-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
                     onClick={clearConversation}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -1184,39 +987,66 @@ ${input}`;
       </CardHeader>
 
       <CardContent className="flex-1 overflow-y-auto p-0 bg-card/50">
-        <div className="p-4 space-y-6">
+        <div className="p-5 space-y-6">
           {messages.map((message, index) => (
             <div
               key={message.id}
               className={cn(
-                "p-4 rounded-lg max-w-[95%] animate-fadeIn shadow-sm",
+                "rounded-xl shadow-sm border border-border/40 overflow-hidden",
                 message.role === "user"
-                  ? "bg-primary bg-gradient-to-br from-primary to-primary/90 text-primary-foreground ml-auto animate-slideLeft"
-                  : "bg-muted bg-gradient-to-br from-muted to-muted/90 animate-slideRight"
+                  ? "bg-blue-100 dark:bg-blue-900/30 ml-6 animate-slideLeft"
+                  : "bg-gray-50 dark:bg-gray-800/50 mr-6 animate-slideRight"
               )}
               style={{
                 animationDelay: `${index * 0.1}s`,
                 animationFillMode: "backwards",
               }}
             >
-              {message.role === "assistant" && (
-                <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-                  <Bot className="h-3.5 w-3.5" />
-                  <span>AI Assistant</span>
-                </div>
-              )}
-              {renderMessageContent(message.content, message.id)}
+              {/* Message header with role indicator */}
+              <div
+                className={cn(
+                  "px-4 py-2 text-xs font-medium flex items-center gap-1.5",
+                  message.role === "user"
+                    ? "bg-blue-200/80 dark:bg-blue-800/50 text-blue-800 dark:text-blue-200"
+                    : "bg-gray-200/80 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300"
+                )}
+              >
+                {message.role === "assistant" ? (
+                  <>
+                    <Bot className="h-3.5 w-3.5" />
+                    <span>AI Assistant</span>
+                  </>
+                ) : (
+                  <>
+                    <div className="h-3.5 w-3.5 rounded-full bg-blue-500/80 flex items-center justify-center text-white text-[10px] font-bold">
+                      U
+                    </div>
+                    <span>You</span>
+                  </>
+                )}
+              </div>
+
+              {/* Message content */}
+              <div className="p-4">
+                {renderMessageContent(message.content, message.id)}
+              </div>
             </div>
           ))}
+
+          {/* Loading indicator */}
           {isLoading && (
-            <div className="bg-muted p-4 rounded-lg max-w-[95%] animate-pulse shadow-sm">
-              <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+            <div className="rounded-xl shadow-sm border border-border/40 overflow-hidden bg-gray-50 dark:bg-gray-800/50 mr-6 animate-pulse">
+              <div className="px-4 py-2 text-xs font-medium bg-gray-200/80 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
                 <Bot className="h-3.5 w-3.5" />
                 <span>AI Assistant</span>
               </div>
-              <div className="flex items-center space-x-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm">Thinking...</span>
+              <div className="p-4">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                  <span className="text-sm text-muted-foreground">
+                    Thinking...
+                  </span>
+                </div>
               </div>
             </div>
           )}
@@ -1224,9 +1054,14 @@ ${input}`;
         </div>
       </CardContent>
 
-      <CardFooter className="p-3 border-t bg-card/90 backdrop-blur-sm shadow-[0_-2px_10px_rgba(0,0,0,0.03)]">
+      <CardFooter className="p-4 border-t bg-card/90 backdrop-blur-sm shadow-[0_-2px_10px_rgba(0,0,0,0.03)]">
         <form onSubmit={handleSubmit} className="w-full flex items-end gap-2">
           <div className="flex-1 relative">
+            {customPlaceholder && input && (
+              <span className="absolute inset-0 text-gray-400 opacity-50 pointer-events-none p-3 px-4 text-sm italic overflow-hidden">
+                {customPlaceholder}
+              </span>
+            )}
             <Textarea
               ref={textareaRef}
               value={input}
@@ -1235,22 +1070,24 @@ ${input}`;
                 adjustTextareaHeight();
               }}
               onKeyDown={handleKeyDown}
-              placeholder={inputPlaceholder}
-              className="min-h-[42px] max-h-[150px] py-2 pr-10 resize-none rounded-xl border-muted-foreground/20 shadow-sm focus:border-primary transition-colors"
+              placeholder={
+                input ? "" : customPlaceholder || "Ask about your code..."
+              }
+              className="min-h-[42px] max-h-[150px] py-3 px-4 resize-none rounded-xl border-gray-200 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors relative bg-transparent"
               disabled={isLoading}
             />
             {isLoading && (
-              <div className="absolute right-3 bottom-2 flex space-x-1">
+              <div className="absolute right-3 bottom-3 flex space-x-1">
                 <span
-                  className="h-2 w-2 bg-primary/60 rounded-full animate-bounce"
+                  className="h-2 w-2 bg-blue-500/60 rounded-full animate-bounce"
                   style={{ animationDelay: "0ms" }}
                 ></span>
                 <span
-                  className="h-2 w-2 bg-primary/60 rounded-full animate-bounce"
+                  className="h-2 w-2 bg-blue-500/60 rounded-full animate-bounce"
                   style={{ animationDelay: "150ms" }}
                 ></span>
                 <span
-                  className="h-2 w-2 bg-primary/60 rounded-full animate-bounce"
+                  className="h-2 w-2 bg-blue-500/60 rounded-full animate-bounce"
                   style={{ animationDelay: "300ms" }}
                 ></span>
               </div>
@@ -1262,7 +1099,7 @@ ${input}`;
                 <Button
                   type="submit"
                   size="sm"
-                  className="h-10 w-10 rounded-xl p-0 shadow-sm"
+                  className="h-10 w-10 rounded-xl p-0 shadow-sm bg-blue-500 hover:bg-blue-600 text-white"
                   disabled={isLoading || !input.trim()}
                 >
                   {isLoading ? (
