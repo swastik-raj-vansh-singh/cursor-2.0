@@ -1,0 +1,213 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light mode theme */
+    --background: 0 0% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 215 60% 40%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 35% 95%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 210 40% 95%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214 32% 90%;
+    --input: 214 32% 90%;
+    --ring: 215 28% 65%;
+
+    --radius: 0.4rem;
+
+    /* Sidebar Light Theme */
+    --sidebar-background: 0 0% 95%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-primary: 215 60% 40%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 210 35% 92%;
+    --sidebar-accent-foreground: 222 47% 11%;
+    --sidebar-border: 214 32% 90%;
+    --sidebar-ring: 222 47% 11%;
+
+    /* Editor Light Theme */
+    --editor-background: 0 0% 100%;
+    --editor-foreground: 222 47% 11%;
+    --editor-line-highlight: 210 35% 96%;
+    --editor-selection: 215 100% 70% / 0.2;
+    --editor-accent: 215 60% 45%;
+    --editor-gutter: 220 14% 96%;
+    --editor-comment: 220 10% 50%;
+    --editor-keyword: 230 60% 50%;
+    --editor-string: 20 65% 45%;
+    --editor-function: 200 70% 45%;
+    --editor-number: 340 60% 50%;
+
+    /* Suggestions Light Theme */
+    --suggestion-new: 160 75% 40%;
+    --suggestion-old: 0 65% 50%;
+    --suggestion-diff: 200 65% 96%;
+  }
+
+  .dark {
+    /* Dark mode theme - VS Code inspired */
+    --background: 220 13% 18%;
+    --foreground: 210 40% 98%;
+
+    --card: 220 13% 20%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 220 13% 18%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 100% 65%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217 33% 25%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 22%;
+    --muted-foreground: 215 20% 75%;
+
+    --accent: 217 33% 25%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 33% 22%;
+    --input: 217 33% 22%;
+    --ring: 212 27% 84%;
+
+    /* Sidebar Dark Theme */
+    --sidebar-background: 220 15% 16%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 210 100% 65%;
+    --sidebar-primary-foreground: 222 47% 11%;
+    --sidebar-accent: 217 33% 20%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 22%;
+    --sidebar-ring: 212 27% 84%;
+
+    /* Editor Dark Theme */
+    --editor-background: 220 13% 15%;
+    --editor-foreground: 210 40% 98%;
+    --editor-line-highlight: 220 13% 18%;
+    --editor-selection: 210 100% 70% / 0.4;
+    --editor-accent: 210 100% 65%;
+    --editor-gutter: 220 13% 20%;
+    --editor-comment: 220 10% 60%;
+    --editor-keyword: 210 100% 75%;
+    --editor-string: 40 70% 60%;
+    --editor-function: 210 100% 65%;
+    --editor-number: 330 65% 65%;
+
+    /* Suggestions Dark Theme */
+    --suggestion-new: 160 75% 40%;
+    --suggestion-old: 0 65% 50%;
+    --suggestion-diff: 220 13% 20%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    @apply antialiased;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans transition-colors duration-200;
+  }
+
+  /* Fix for the circular dependency - apply the font family directly instead of using @apply */
+  code,
+  pre {
+    font-family: theme("fontFamily.mono");
+  }
+}
+
+@layer components {
+  .glass {
+    @apply backdrop-blur-md bg-background/70 border border-border/50;
+  }
+
+  .shimmer {
+    @apply relative overflow-hidden before:absolute before:inset-0 before:-translate-x-full before:animate-shimmer before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent;
+  }
+
+  .command-item {
+    @apply flex items-center gap-2 px-3 py-2 text-sm rounded-md cursor-pointer hover:bg-accent;
+  }
+
+  .editor-toolbar {
+    @apply flex items-center gap-2 p-1.5 bg-card border-b border-border;
+  }
+
+  .suggestion-panel {
+    @apply p-4 bg-card rounded-lg border border-border;
+  }
+}
+
+/* Add animations for AI Assistant */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideRight {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slideRight {
+  animation: slideRight 0.3s ease-out;
+}
+
+.animate-slideLeft {
+  animation: slideLeft 0.3s ease-out;
+}
