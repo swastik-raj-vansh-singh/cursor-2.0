@@ -208,6 +208,14 @@ export function AIAssistant() {
     null
   );
 
+  // Add state to track the original selection information
+  const [selectionInfo, setSelectionInfo] = useState<{
+    filePath: string;
+    originalCode: string;
+    selectionStart?: number;
+    selectionEnd?: number;
+  } | null>(null);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -266,6 +274,14 @@ export function AIAssistant() {
   // Listen for selectedCode changes
   useEffect(() => {
     if (selectedCode) {
+      // Store information about the selection without setting the input
+      if (activeFile) {
+        setSelectionInfo({
+          filePath: activeFile.path,
+          originalCode: selectedCode,
+        });
+      }
+
       // If user has selected code, prepare a modification request
       setModificationRequest({
         originalCode: selectedCode,
@@ -274,9 +290,10 @@ export function AIAssistant() {
         isProcessing: false,
       });
 
-      // Set input placeholder text to guide the user
-      setInput("What would you like to change about this code?");
+      // Set the custom placeholder asking what the user wants to change
+      setCustomPlaceholder("What would you like to change about this code?");
 
+      // Don't set the input with code - leave it empty for user to type
       // Focus the input field
       setTimeout(() => {
         if (textareaRef.current) {
@@ -287,7 +304,7 @@ export function AIAssistant() {
       // Clear the selected code to prevent duplicate processing
       setSelectedCode(null);
     }
-  }, [selectedCode, setSelectedCode]);
+  }, [selectedCode, setSelectedCode, activeFile]);
 
   // Reset conversation when active file changes
   useEffect(() => {
@@ -511,26 +528,37 @@ export function AIAssistant() {
 
   const addCodeToChat = (code: string) => {
     // Show feedback immediately
-    toast.success("Code added to chat input", {
+    toast.success("Ready for your instructions", {
       duration: 2000,
       position: "bottom-center",
     });
 
-    // Set the input with the code
-    setInput(code);
+    // Store the code in our selection info without setting it in the input
+    if (activeFile) {
+      setSelectionInfo({
+        filePath: activeFile.path,
+        originalCode: code,
+      });
+    }
 
-    // Set the custom placeholder asking what the user wants to change
+    // Store in modification request for later use
+    setModificationRequest({
+      originalCode: code,
+      modifiedCode: null,
+      promptText: "",
+      isProcessing: false,
+    });
+
+    // Set the custom placeholder without setting the input
     setCustomPlaceholder("What would you like to change about this code?");
 
-    // Then focus and resize after a short delay to ensure state is updated
+    // Clear any existing input
+    setInput("");
+
+    // Focus and resize after a short delay
     setTimeout(() => {
       if (textareaRef.current) {
         textareaRef.current.focus();
-        textareaRef.current.style.height = "auto";
-        textareaRef.current.style.height = `${Math.min(
-          textareaRef.current.scrollHeight,
-          150
-        )}px`;
       }
     }, 50);
   };
@@ -721,41 +749,24 @@ export function AIAssistant() {
                         }`}
                         onClick={() => {
                           if (activeFile) {
-                            // Show loading feedback
-                            toast.loading(
-                              isModifiedCode
-                                ? "Integrating changes..."
-                                : "Applying changes...",
-                              {
-                                id: "apply-changes",
-                                duration: 1000,
-                              }
-                            );
-
-                            // Apply the code to the active file
-                            const success = updateFileContent(
-                              activeFile.path,
-                              code
-                            );
-
-                            if (success) {
-                              // Success notification
-                              toast.success(
-                                isModifiedCode
-                                  ? "Modified code integrated successfully"
-                                  : "Code applied successfully",
-                                { id: "apply-success" }
+                            // Fast path for AI-modified code
+                            if (isModifiedCode && selectionInfo) {
+                              // Use direct store access for speed
+                              const success = replaceSelectedCode(
+                                code,
+                                selectionInfo.originalCode,
+                                selectionInfo.filePath
                               );
 
-                              // If this was a modification request, clear it after applying
-                              if (isModifiedCode) {
+                              // Reset state after successful replacement (only if successful)
+                              if (success) {
                                 setModificationRequest(null);
+                                setSelectionInfo(null);
 
-                                // Add a confirmation message
+                                // Add confirmation message without causing re-renders
                                 const confirmMessage: Message = {
                                   role: "assistant",
-                                  content:
-                                    "✅ The changes have been integrated into your file.",
+                                  content: "✅ Changes applied successfully",
                                   id: String(Date.now()),
                                 };
                                 setMessages((prev) => [
@@ -764,15 +775,23 @@ export function AIAssistant() {
                                 ]);
                               }
                             } else {
-                              toast.error(
-                                "Failed to apply code: Could not update file",
-                                {
-                                  id: "apply-error",
-                                }
+                              // Fall back to replacing the entire file content
+                              const success = updateFileContent(
+                                activeFile.path,
+                                code
                               );
+                              if (success) {
+                                toast.success("Code applied", {
+                                  duration: 1500,
+                                });
+                              } else {
+                                toast.error("Failed to apply code", {
+                                  duration: 1500,
+                                });
+                              }
                             }
                           } else {
-                            toast.error("No active file to apply changes to");
+                            toast.error("No active file", { duration: 1000 });
                           }
                         }}
                       >
@@ -945,6 +964,69 @@ export function AIAssistant() {
     return false;
   };
 
+  // Improve the replaceSelectedCode function for faster performance
+  const replaceSelectedCode = (
+    newCode: string,
+    originalCode: string,
+    filePath: string
+  ) => {
+    // Fast path: Get the store directly for immediate updates
+    const store = useAppStore.getState();
+
+    // If we have the original file and selection info, perform a targeted replacement
+    if (store.activeFile && store.activeFile.path === filePath) {
+      const fullContent = store.activeFile.content;
+
+      // Check if the original code is in the file
+      if (fullContent.includes(originalCode)) {
+        // Create the new content by replacing only the selected part
+        const newContent = fullContent.replace(originalCode, newCode);
+
+        // Fast direct updates without unnecessary state transitions
+        store.activeFile = {
+          ...store.activeFile,
+          content: newContent,
+        };
+
+        // Update openFiles array directly
+        store.openFiles = store.openFiles.map((file) =>
+          file.path === filePath ? { ...file, content: newContent } : file
+        );
+
+        // Update file tree (optimized for performance)
+        const updateFileInTree = (items: any[]): boolean => {
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].path === filePath) {
+              items[i].content = newContent;
+              return true;
+            }
+            if (items[i].children && items[i].children.length > 0) {
+              if (updateFileInTree(items[i].children)) return true;
+            }
+          }
+          return false;
+        };
+
+        // Create a clone of the file tree and update it
+        const updatedFilesTree = [...store.filesTree];
+        updateFileInTree(updatedFilesTree);
+        store.filesTree = updatedFilesTree;
+
+        // Update local state (do this last for performance)
+        setActiveFileContent(newContent);
+
+        // Success notification (fast and non-blocking)
+        toast.success("Code applied", { duration: 1500 });
+        return true;
+      } else {
+        toast.error("Could not locate the original code", { duration: 1500 });
+      }
+    } else {
+      toast.error("The original file is no longer active", { duration: 1500 });
+    }
+    return false;
+  };
+
   return (
     <Card className="w-full h-full flex flex-col overflow-hidden border-0 rounded-none shadow-none backdrop-blur-sm bg-card/70">
       <CardHeader className="py-3 px-4 border-b flex-shrink-0 bg-card/90 backdrop-blur-sm shadow-sm">
@@ -1038,7 +1120,9 @@ export function AIAssistant() {
             <div className="rounded-xl shadow-sm border border-border/40 overflow-hidden bg-gray-50 dark:bg-gray-800/50 mr-6 animate-pulse">
               <div className="px-4 py-2 text-xs font-medium bg-gray-200/80 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
                 <Bot className="h-3.5 w-3.5" />
-                <span>AI Assistant</span>
+                <span className="text-sm text-muted-foreground">
+                  Thinking...
+                </span>
               </div>
               <div className="p-4">
                 <div className="flex items-center gap-2">
@@ -1057,11 +1141,12 @@ export function AIAssistant() {
       <CardFooter className="p-4 border-t bg-card/90 backdrop-blur-sm shadow-[0_-2px_10px_rgba(0,0,0,0.03)]">
         <form onSubmit={handleSubmit} className="w-full flex items-end gap-2">
           <div className="flex-1 relative">
-            {customPlaceholder && input && (
-              <span className="absolute inset-0 text-gray-400 opacity-50 pointer-events-none p-3 px-4 text-sm italic overflow-hidden">
-                {customPlaceholder}
-              </span>
+            {customPlaceholder && !input && (
+              <div className="absolute inset-0 px-4 py-3 pointer-events-none text-gray-400/70 select-none">
+                <span className="text-sm italic">{customPlaceholder}</span>
+              </div>
             )}
+
             <Textarea
               ref={textareaRef}
               value={input}
@@ -1070,14 +1155,17 @@ export function AIAssistant() {
                 adjustTextareaHeight();
               }}
               onKeyDown={handleKeyDown}
-              placeholder={
-                input ? "" : customPlaceholder || "Ask about your code..."
-              }
-              className="min-h-[42px] max-h-[150px] py-3 px-4 resize-none rounded-xl border-gray-200 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors relative bg-transparent"
+              placeholder=""
+              className="min-h-[42px] max-h-[150px] py-3 px-4 resize-none rounded-xl border-gray-200 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors bg-transparent"
+              style={{
+                caretColor: "auto",
+                backgroundColor: "transparent",
+              }}
               disabled={isLoading}
             />
+
             {isLoading && (
-              <div className="absolute right-3 bottom-3 flex space-x-1">
+              <div className="absolute right-3 bottom-3 flex space-x-1 z-10">
                 <span
                   className="h-2 w-2 bg-blue-500/60 rounded-full animate-bounce"
                   style={{ animationDelay: "0ms" }}
